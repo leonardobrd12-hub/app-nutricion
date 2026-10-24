@@ -89,7 +89,7 @@ html, body, .stApp, p, label, li, input, textarea, button, [data-testid="stMarkd
 h1, h2, h3 {{ font-family: 'Lora', serif !important; color: {VERDE_OSC} !important; letter-spacing: -.3px; }}
 h1 {{ font-size: 2.1rem !important; }}
 h3 {{ font-size: 1.25rem !important; margin-top: .6rem; }}
-.block-container {{ max-width: 780px; padding-top: 2.2rem; padding-bottom: 4rem; }}
+.block-container {{ max-width: 780px; padding-top: 4.2rem; padding-bottom: 4rem; }}
 header[data-testid="stHeader"] {{ background: transparent; }}
 footer {{ visibility: hidden; }}
 
@@ -178,7 +178,7 @@ input, textarea, [data-baseweb="select"] div {{ font-size: 16px !important; }}
 .vacio .icono {{ font-size: 34px; }}
 
 @media (max-width: 640px) {{
-  .block-container {{ padding: 1.2rem .9rem 3rem; }}
+  .block-container {{ padding: 3.8rem .9rem 3rem; }}
   h1 {{ font-size: 1.7rem !important; }}
   .saludo .s-hola {{ font-size: 1.45rem; }}
   button[data-baseweb="tab"] {{ padding: 7px 12px !important; }}
