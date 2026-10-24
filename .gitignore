@@ -1,5 +1,0 @@
-# Credenciales: nunca subirlas a GitHub
-.streamlit/secrets.toml
-credentials*.json
-.streamlit/credentials*.json
-__pycache__/
