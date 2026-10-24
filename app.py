@@ -442,7 +442,12 @@ def credenciales():
 
 @st.cache_resource
 def conectar():
-    return gspread.authorize(credenciales()).open(st.secrets["sheet_name"])
+    try:
+        # Reintenta solo (con espera creciente) si Google dice "demasiadas solicitudes"
+        cliente = gspread.authorize(credenciales(), http_client=gspread.BackOffHTTPClient)
+    except (AttributeError, TypeError):
+        cliente = gspread.authorize(credenciales())
+    return cliente.open(st.secrets["sheet_name"])
 
 
 @st.cache_resource
@@ -450,46 +455,108 @@ def drive():
     return AuthorizedSession(credenciales())
 
 
+# ---------------------------------------------------------------- Memoria compartida
+# Las pestañas y sus encabezados se recuerdan para no pedírselos a Google en cada clic.
+# Cada hoja tiene un número de "versión": al guardar en una hoja solo esa se vuelve a leer.
+@st.cache_resource
+def _memoria() -> dict:
+    return {"pestanas": {}, "encabezados": {}, "versiones": {}}
+
+
+def _pestana(nombre: str):
+    mem = _memoria()["pestanas"]
+    if nombre not in mem:
+        mem[nombre] = conectar().worksheet(nombre)
+    return mem[nombre]
+
+
+def invalidar(nombre: str):
+    """Avisa que la hoja cambió: la próxima lectura viene fresca de Google (para todos)."""
+    versiones = _memoria()["versiones"]
+    versiones[nombre] = versiones.get(nombre, 0) + 1
+    _memoria()["encabezados"].pop(nombre, None)
+
+
+def reintentar(funcion, *args, intentos: int = 4, **kwargs):
+    """Respaldo extra: si Google limita las solicitudes, espera y vuelve a intentar."""
+    import time
+
+    for i in range(intentos):
+        try:
+            return funcion(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            codigo = getattr(getattr(e, "response", None), "status_code", None)
+            if codigo not in (429, 500, 503) or i == intentos - 1:
+                raise
+            time.sleep(2 ** (i + 1))
+
+
 def hoja(nombre: str):
     """Devuelve la pestaña; si es una de las hojas nuevas y no existe, la crea."""
-    libro = conectar()
     try:
-        return libro.worksheet(nombre)
+        return reintentar(_pestana, nombre)
     except gspread.WorksheetNotFound:
         encabezados = HOJAS_NUEVAS.get(nombre)
         if not encabezados:
             raise
-        ws = libro.add_worksheet(title=nombre, rows=1000, cols=max(6, len(encabezados)))
+        ws = conectar().add_worksheet(title=nombre, rows=1000, cols=max(6, len(encabezados)))
         ws.append_row(encabezados)
+        _memoria()["pestanas"][nombre] = ws
+        invalidar(nombre)
         return ws
+
+
+def encabezados_de(nombre: str) -> list:
+    mem = _memoria()["encabezados"]
+    if nombre not in mem:
+        mem[nombre] = reintentar(hoja(nombre).row_values, 1)
+    return list(mem[nombre])
 
 
 def asegurar_columnas(nombre: str, columnas: list[str]):
     """Agrega al Sheet los encabezados que falten."""
-    ws = hoja(nombre)
-    encabezados = ws.row_values(1)
+    encabezados = encabezados_de(nombre)
     faltan = [c for c in columnas if c not in encabezados]
     if faltan:
+        ws = hoja(nombre)
         if ws.col_count < len(encabezados) + len(faltan):
-            ws.add_cols(len(faltan))
+            reintentar(ws.add_cols, len(faltan))
         for k, c in enumerate(faltan):
-            ws.update_cell(1, len(encabezados) + k + 1, c)
-        st.cache_data.clear()
+            reintentar(ws.update_cell, 1, len(encabezados) + k + 1, c)
+        invalidar(nombre)
+        _memoria()["encabezados"][nombre] = encabezados + faltan
     return encabezados + faltan
 
 
-@st.cache_data(ttl=60)
-def leer(nombre: str) -> pd.DataFrame:
+@st.cache_data(ttl=180, show_spinner=False)
+def _leer(nombre: str, version: int) -> pd.DataFrame:
     try:
-        ws = conectar().worksheet(nombre)
+        ws = reintentar(_pestana, nombre)
     except gspread.WorksheetNotFound:
         return pd.DataFrame(columns=HOJAS_NUEVAS.get(nombre, []))
-    df = pd.DataFrame(ws.get_all_records())
-    if df.empty:
-        df = pd.DataFrame(columns=[c for c in ws.row_values(1) if c])
+    valores = reintentar(ws.get_all_values)
+    if not valores:
+        return pd.DataFrame(columns=HOJAS_NUEVAS.get(nombre, []))
+    encabezados = [c for c in valores[0]]
+    _memoria()["encabezados"][nombre] = encabezados
+    filas = [f + [""] * (len(encabezados) - len(f)) for f in valores[1:]]
+    df = pd.DataFrame([f[: len(encabezados)] for f in filas], columns=encabezados)
+    df = df.loc[:, [c for c in df.columns if c]]
+    # Igual que antes: números como números (para teléfonos, kcal, pesos…)
+    for c in df.columns:
+        convertida = pd.to_numeric(df[c], errors="coerce")
+        if df[c].astype(str).str.strip().ne("").any() and convertida[df[c].astype(str).str.strip() != ""].notna().all():
+            if (convertida.dropna() % 1 == 0).all():
+                convertida = convertida.astype("Int64")
+            df[c] = convertida.astype(object).where(df[c].astype(str).str.strip() != "", "")
     if "id_paciente" in df.columns:
         df["id_paciente"] = df["id_paciente"].astype(str).str.strip().str.upper()
     return df
+
+
+def leer(nombre: str) -> pd.DataFrame:
+    """Lee una hoja (desde la memoria si nadie la ha cambiado; se refresca cada 3 min)."""
+    return _leer(nombre, _memoria()["versiones"].get(nombre, 0)).copy()
 
 
 def agregar_filas(nombre: str, filas: list[dict]):
@@ -497,43 +564,52 @@ def agregar_filas(nombre: str, filas: list[dict]):
     claves = list(dict.fromkeys(k for f in filas for k in f))
     encabezados = asegurar_columnas(nombre, claves)
     valores = [[f.get(c, "") for c in encabezados] for f in filas]
-    hoja(nombre).append_rows(valores, value_input_option="RAW")
-    st.cache_data.clear()
+    reintentar(hoja(nombre).append_rows, valores, value_input_option="RAW")
+    invalidar(nombre)
 
 
 def actualizar_celda(nombre: str, fila_df: int, columna: str, valor):
     """fila_df = índice del DataFrame leído con leer() (fila 0 = fila 2 del Sheet)."""
     encabezados = asegurar_columnas(nombre, [columna])
-    hoja(nombre).update_cell(fila_df + 2, encabezados.index(columna) + 1, valor)
-    st.cache_data.clear()
+    reintentar(hoja(nombre).update_cell, fila_df + 2, encabezados.index(columna) + 1, valor)
+    invalidar(nombre)
+
+
+def _vivo(nombre: str) -> pd.DataFrame:
+    """Lectura directa de Google (para borrar sin riesgo de equivocarse de fila)."""
+    valores = reintentar(hoja(nombre).get_all_values)
+    if len(valores) < 2:
+        return pd.DataFrame()
+    enc = valores[0]
+    return pd.DataFrame([(f + [""] * len(enc))[: len(enc)] for f in valores[1:]], columns=enc)
 
 
 def borrar_donde(nombre: str, **campos):
     """Borra las filas donde todas las columnas indicadas coinciden (leyendo en vivo)."""
     ws = hoja(nombre)
-    vivo = pd.DataFrame(ws.get_all_records())
+    vivo = _vivo(nombre)
     if vivo.empty:
         return
     mask = pd.Series(True, index=vivo.index)
     for col, val in campos.items():
         mask &= vivo[col].astype(str).str.strip().str.upper() == str(val).strip().upper()
     for i in sorted(vivo.index[mask], reverse=True):
-        ws.delete_rows(int(i) + 2)
-    st.cache_data.clear()
+        reintentar(ws.delete_rows, int(i) + 2)
+    invalidar(nombre)
 
 
 def borrar_menu(pid: str, fecha: str):
     """Borra el menú de una paciente con esa fecha_inicio (leyendo el Sheet en vivo)."""
     ws = hoja("Menus")
-    vivo = pd.DataFrame(ws.get_all_records())
+    vivo = _vivo("Menus")
     if vivo.empty:
         return
     mask = (vivo["id_paciente"].astype(str).str.strip().str.upper() == pid) & (
         vivo["fecha_inicio"].apply(fecha_iso) == fecha
     )
     for i in sorted(vivo.index[mask], reverse=True):
-        ws.delete_rows(int(i) + 2)
-    st.cache_data.clear()
+        reintentar(ws.delete_rows, int(i) + 2)
+    invalidar("Menus")
 
 
 def idx_paciente(pid: str):
@@ -1231,7 +1307,13 @@ def vasos_de(pid: str, fecha: str) -> int:
 
 
 def guardar_vasos(pid: str, fecha: str, vasos: int):
-    borrar_donde("Agua", id_paciente=pid, fecha=fecha)
+    """Actualiza el número del día (1 llamada); si es el primer vaso del día, agrega la fila."""
+    agua = leer("Agua")
+    if not agua.empty:
+        filas = agua.index[(agua["id_paciente"] == pid) & (agua["fecha"].apply(fecha_iso) == fecha)]
+        if len(filas):
+            actualizar_celda("Agua", int(filas[0]), "vasos", max(vasos, 0))
+            return
     if vasos > 0:
         agregar_filas("Agua", [{"id_paciente": pid, "fecha": fecha, "vasos": vasos}])
 
@@ -1951,16 +2033,15 @@ def vista_paciente():
                 nota = st.text_input("Motivo o comentario (opcional)")
 
                 if st.button("Agendar cita", type="primary", use_container_width=True):
-                    ws = hoja("Citas")
                     # Volver a leer en vivo por si alguien tomó el horario hace un momento
-                    actuales = citas_limpias(pd.DataFrame(ws.get_all_records()))
+                    actuales = citas_limpias(_vivo("Citas"))
                     inicio = datetime.strptime(f"{dia} {hora}", "%Y-%m-%d %H:%M")
                     tomado = (
                         (actuales["estado"] == "agendada") & (actuales["inicio"] == inicio)
                     ).any()
                     if tomado:
                         st.error("Ese horario se acaba de ocupar. Elige otro.")
-                        st.cache_data.clear()
+                        invalidar("Citas")
                     else:
                         agregar_filas("Citas", [{
                             "id_cita": siguiente_id(actuales["id_cita"], "C"),
@@ -2086,9 +2167,9 @@ def editar_horario():
     if st.button("Guardar horario", type="primary"):
         filas = [[d, fila["Hora"]] for d in DIAS for _, fila in editado.iterrows() if fila[d]]
         ws = hoja("Horarios")
-        ws.clear()
-        ws.append_rows([["dia_semana", "hora"]] + filas, value_input_option="RAW")
-        st.cache_data.clear()
+        reintentar(ws.clear)
+        reintentar(ws.append_rows, [["dia_semana", "hora"]] + filas, value_input_option="RAW")
+        invalidar("Horarios")
         st.toast("Horario guardado ✅")
         st.rerun()
 
