@@ -1,9 +1,0 @@
-streamlit
-gspread
-google-auth
-pandas
-altair
-pymupdf
-requests
-openpyxl
-reportlab
