@@ -41,13 +41,19 @@ st.set_page_config(
 
 
 def hoja_svg(tam: int = 48, grosor: float = 1.6) -> str:
-    """La hoja del logo; toma el color del texto (sirve en claro y oscuro)."""
-    return (
-        f'<svg width="{tam}" height="{tam}" viewBox="0 0 64 64" aria-hidden="true" fill="none" '
-        f'stroke="currentColor" stroke-width="{grosor}" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M32 6 C48 16 52 38 32 58 C12 38 16 16 32 6 Z"></path><path d="M32 14 L32 62"></path>'
-        '<path d="M32 28 L41 21"></path><path d="M32 38 L23 31"></path><path d="M32 47 L42 40"></path></svg>'
+    """La hoja del logo como imagen (Streamlit limpia los <svg> sueltos dentro de st.html)."""
+    import base64
+
+    color = "#CFE6D5" if st.session_state.get("oscuro") else "#2F4A34"
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="{color}" '
+        f'stroke-width="{grosor}" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M32 6 C48 16 52 38 32 58 C12 38 16 16 32 6 Z"/><path d="M32 14 L32 62"/>'
+        '<path d="M32 28 L41 21"/><path d="M32 38 L23 31"/><path d="M32 47 L42 40"/></svg>'
     )
+    datos = base64.b64encode(svg.encode()).decode()
+    return f'<img src="data:image/svg+xml;base64,{datos}" width="{tam}" height="{tam}" alt="">'
+
 
 
 def logo_vertical() -> str:
@@ -389,7 +395,7 @@ def _sincronizar_tema():
 
 
 def interruptor_tema(clave: str):
-    st.toggle("🌙 Oscuro", key="oscuro", on_change=_sincronizar_tema, help="Cambiar a modo oscuro o claro")
+    st.toggle("🌙", key="oscuro", on_change=_sincronizar_tema, help="Modo oscuro")
 
 
 if "oscuro" not in st.session_state:
