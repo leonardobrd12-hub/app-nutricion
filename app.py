@@ -1585,6 +1585,47 @@ def _fuente(nombre: str, tam: int, variante: str | None = None):
         return ImageFont.load_default(tam)
 
 
+def boton_compartir(png: bytes, nombre_archivo: str):
+    """Botón que abre el menú de Compartir del celular (Instagram, WhatsApp, Guardar imagen…)."""
+    import base64
+    import json
+
+    import streamlit.components.v1 as components
+
+    datos = base64.b64encode(png).decode()
+    components.html(
+        f"""
+<button id="compartir" style="width:100%;padding:13px 16px;border:none;border-radius:999px;
+  background:#5E8B6C;color:#fff;font:600 16px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  cursor:pointer">📤 Compartir</button>
+<div id="aviso" style="font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#6b7a70;
+  margin-top:6px;text-align:center"></div>
+<script>
+const datos = "{datos}";
+const nombre = {json.dumps(nombre_archivo)};
+const aviso = document.getElementById("aviso");
+document.getElementById("compartir").addEventListener("click", async () => {{
+  try {{
+    const bin = atob(datos);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const archivo = new File([bytes], nombre, {{ type: "image/png" }});
+    if (navigator.canShare && navigator.canShare({{ files: [archivo] }})) {{
+      await navigator.share({{ files: [archivo], title: "Mi progreso" }});
+    }} else {{
+      aviso.textContent = "Tu navegador no permite compartir directo. Usa Descargar o mantén presionada la imagen.";
+    }}
+  }} catch (e) {{
+    if (e.name !== "AbortError") {{
+      aviso.textContent = "No se pudo abrir Compartir aquí. Mantén presionada la imagen para guardarla.";
+    }}
+  }}
+}});
+</script>""",
+        height=95,
+    )
+
+
 def datos_tarjeta(pid: str, p: dict) -> dict:
     """Junta los números de la paciente para la tarjeta."""
     hoy = ahora_mx().date()
@@ -2212,18 +2253,23 @@ def vista_paciente():
             ver_cin = o3.checkbox("Cintura", value=False, key="t_cin")
             try:
                 png = tarjeta_png(datos_tarjeta(pid, p), paleta, ver_pct, ver_kg, ver_cin)
+                nombre_archivo = f"Mi progreso {str(p.get('nombre', '')).split()[0].title()}.png"
                 v1, v2 = st.columns([1, 1], vertical_alignment="center")
                 v1.image(png, use_container_width=True)
-                v2.download_button(
-                    "📥 Descargar tarjeta",
-                    png,
-                    file_name=f"Mi progreso {str(p.get('nombre', '')).split()[0].title()}.png",
-                    mime="image/png",
-                    use_container_width=True,
-                    type="primary",
-                    key="descargar_tarjeta",
-                )
-                v2.caption("Descárgala y súbela a tus historias o mándala por WhatsApp.")
+                with v2:
+                    boton_compartir(png, nombre_archivo)
+                    st.download_button(
+                        "📥 Descargar",
+                        png,
+                        file_name=nombre_archivo,
+                        mime="image/png",
+                        use_container_width=True,
+                        key="descargar_tarjeta",
+                    )
+                    st.caption(
+                        "¿No se abre el menú de compartir? Mantén presionada la imagen "
+                        "y elige **Guardar en Fotos** o **Compartir**."
+                    )
             except Exception:
                 st.caption("No pude generar la tarjeta en este momento.")
 
