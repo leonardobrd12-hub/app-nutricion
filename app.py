@@ -252,6 +252,30 @@ CSS_EXTRA = """<style>
 .hero-sub { text-align:center; color:#6b7a70; margin:.2rem 0 1.4rem; font-size:1.02rem; }
 @media (max-width: 640px) { .marca .m-nombre { font-size:2.6rem; } .marca .m-sub { letter-spacing:6px; } }
 .alerta { background:#FFF8EC; border:1px solid #F0DDB8; border-radius:14px; padding:10px 14px; margin:6px 0; }
+/* Pestañas principales en forma de cápsula (selectores estables por rol) */
+[data-testid="stTabs"] [role="tablist"] {
+  display:flex; flex-wrap:wrap; gap:10px !important; background:transparent !important;
+  padding:4px 0 10px !important; border-bottom:none !important; box-shadow:none !important;
+}
+[data-testid="stTabs"] [role="tab"] {
+  border-radius:999px !important; padding:11px 22px !important; height:auto !important; margin:0 !important;
+  background:#FFFFFF !important; border:1.5px solid #CFE0D2 !important; justify-content:center;
+  box-shadow:0 2px 8px rgba(54,89,74,.08) !important; transition:all .15s ease;
+}
+[data-testid="stTabs"] [role="tab"] p { font-size:1.05rem !important; font-weight:700 !important; color:#36594A !important; }
+[data-testid="stTabs"] [role="tab"]:hover { background:#E5EFE2 !important; border-color:#9DC2A5 !important; }
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+  background:#5E8B6C !important; border-color:#5E8B6C !important; box-shadow:0 4px 12px rgba(54,89,74,.25) !important;
+}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] p { color:#FFFFFF !important; }
+[data-testid="stTabs"] [data-baseweb="tab-highlight"], [data-testid="stTabs"] [data-baseweb="tab-border"] {
+  display:none !important;
+}
+@media (max-width: 640px) {
+  [data-testid="stTabs"] [role="tablist"] { flex-wrap:nowrap; gap:6px !important; }
+  [data-testid="stTabs"] [role="tab"] { padding:11px 6px !important; flex:1 1 0; justify-content:center; min-width:0; }
+  [data-testid="stTabs"] [role="tab"] p { font-size:.9rem !important; white-space:nowrap; }
+}
 </style>"""
 st.html(CSS_EXTRA)
 
@@ -380,6 +404,12 @@ header[data-testid="stHeader"] { background:transparent !important; }
 [data-testid="stToast"] *, [data-testid="stToastContainer"] * { color:#E4ECE6 !important; }
 /* Radios */
 [data-testid="stRadio"] label p { color:#E4ECE6 !important; }
+[data-testid="stTabs"] [role="tab"] { background:#26332C !important; border-color:#3D5045 !important; box-shadow:none !important; }
+[data-testid="stTabs"] [role="tab"] p { color:#DCEBE0 !important; }
+[data-testid="stTabs"] [role="tab"]:hover { background:#2F4037 !important; }
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] { background:#6FA07E !important; border-color:#6FA07E !important; }
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] p { color:#10251A !important; }
+[data-testid="stTabs"] [role="tablist"] { background:transparent !important; }
 </style>"""
 
 
