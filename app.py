@@ -1553,6 +1553,217 @@ def ultimo_peso(pid: str):
     return float(v.iloc[-1]) if not v.empty else None
 
 
+# ================================================================ Tarjeta para compartir (tipo Spotify Wrapped)
+PALETAS_TARJETA = {
+    "Bosque": {"arriba": "#2F4A34", "abajo": "#6F9A7C", "texto": "#F7F5EF", "acento": "#CFE6D5",
+               "suave": "#B9CDBF", "circulo": "#3E5E45"},
+    "Salvia": {"arriba": "#A9CBB1", "abajo": "#E8F1E4", "texto": "#22382A", "acento": "#2F4A34",
+               "suave": "#4F6B57", "circulo": "#F7F5EF"},
+    "Crema": {"arriba": "#F7F5EF", "abajo": "#E9DCC3", "texto": "#2F4A34", "acento": "#5E8B6C",
+              "suave": "#6B7A70", "circulo": "#FFFFFF"},
+}
+
+
+def _fuente(nombre: str, tam: int, variante: str | None = None):
+    from PIL import ImageFont
+
+    ruta = ruta_imagen(nombre)
+    if ruta:
+        try:
+            f = ImageFont.truetype(ruta, tam)
+            if variante:
+                try:
+                    f.set_variation_by_name(variante)
+                except Exception:
+                    pass
+            return f
+        except OSError:
+            pass
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", tam)
+    except OSError:
+        return ImageFont.load_default(tam)
+
+
+def datos_tarjeta(pid: str, p: dict) -> dict:
+    """Junta los números de la paciente para la tarjeta."""
+    hoy = ahora_mx().date()
+    d = {"nombre": str(p.get("nombre", "")).split()[0].title() if p.get("nombre") else ""}
+
+    med = mediciones_de(pid)
+    if not med.empty:
+        pesos = med[["fecha", "peso_kg"]].dropna()
+        if len(pesos) >= 2:
+            ini, fin = float(pesos["peso_kg"].iloc[0]), float(pesos["peso_kg"].iloc[-1])
+            d["peso_kg"] = fin - ini
+            d["peso_pct"] = (fin - ini) / ini * 100 if ini else None
+        cint = med[["fecha", "cintura_cm"]].dropna()
+        if len(cint) >= 2:
+            d["cintura_cm"] = float(cint["cintura_cm"].iloc[-1]) - float(cint["cintura_cm"].iloc[0])
+
+    inicio = pd.to_datetime(fecha_iso(p.get("fecha_alta", "")), errors="coerce")
+    if pd.isna(inicio) and not med.empty:
+        inicio = med["fecha"].min()
+    if not pd.isna(inicio):
+        d["inicio"] = inicio
+        d["dias_plan"] = max((pd.Timestamp(hoy) - inicio).days, 0)
+
+    ok = dias_cumplidos(pid)
+    d["racha_actual"], d["racha_mejor"] = rachas(ok, hoy)
+
+    registro = leer("Registro")
+    d["comidas"] = int((registro["id_paciente"] == pid).sum()) if not registro.empty else 0
+    agua = leer("Agua")
+    if not agua.empty:
+        d["vasos"] = int(pd.to_numeric(agua.loc[agua["id_paciente"] == pid, "vasos"], errors="coerce").fillna(0).sum())
+    citas = citas_limpias(leer("Citas"))
+    d["consultas"] = int(((citas["id_paciente"] == pid) & (citas["estado"] == "atendida")).sum())
+    return d
+
+
+@st.cache_data(show_spinner=False, max_entries=60)
+def tarjeta_png(d: dict, paleta: str, ver_pct: bool, ver_kg: bool, ver_cintura: bool) -> bytes:
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+
+    ancho, alto = 1080, 1920
+    c = PALETAS_TARJETA.get(paleta, PALETAS_TARJETA["Bosque"])
+
+    def rgb(h):
+        h = h.lstrip("#")
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+    # Fondo degradado
+    a, b = rgb(c["arriba"]), rgb(c["abajo"])
+    img = Image.new("RGB", (ancho, alto))
+    dib = ImageDraw.Draw(img)
+    for y in range(alto):
+        t = y / (alto - 1)
+        dib.line([(0, y), (ancho, y)], fill=tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3)))
+    # Círculos decorativos suaves
+    capa = Image.new("RGBA", (ancho, alto), (0, 0, 0, 0))
+    dc = ImageDraw.Draw(capa)
+    dc.ellipse((640, -220, 1320, 460), fill=rgb(c["acento"]) + (34,))
+    dc.ellipse((-260, 1380, 420, 2060), fill=rgb(c["acento"]) + (26,))
+    img = Image.alpha_composite(img.convert("RGBA"), capa)
+    dib = ImageDraw.Draw(img)
+
+    texto, acento, suave = rgb(c["texto"]), rgb(c["acento"]), rgb(c["suave"])
+    serif = lambda t, v="Medium": _fuente("Lora-Variable.ttf", t, v)  # noqa: E731
+    sans = lambda t: _fuente("Poppins-Regular.ttf", t)  # noqa: E731
+    sans_m = lambda t: _fuente("Poppins-Medium.ttf", t)  # noqa: E731
+    sans_b = lambda t: _fuente("Poppins-Bold.ttf", t)  # noqa: E731
+
+    def espaciado(xy, txt, fuente, color, sep, centrado=False):
+        x, y = xy
+        anchos = [dib.textlength(ch, font=fuente) for ch in txt]
+        total = sum(anchos) + sep * (len(txt) - 1)
+        if centrado:
+            x = (ancho - total) / 2
+        for ch, w in zip(txt, anchos):
+            dib.text((x, y), ch, font=fuente, fill=color)
+            x += w + sep
+
+    # --- Marca
+    hoja = ruta_imagen("hoja_blanca.png")
+    if hoja:
+        h = Image.open(hoja).convert("RGBA").resize((86, 86))
+        tinta = Image.new("RGBA", h.size, texto + (255,))
+        img.paste(tinta, ((ancho - 86) // 2, 96), h)
+    f = serif(58)
+    w = dib.textlength(MARCA_NOMBRE, font=f)
+    dib.text(((ancho - w) / 2, 196), MARCA_NOMBRE, font=f, fill=texto)
+    espaciado((0, 276), MARCA_SUB, sans_m(22), suave, 9, centrado=True)
+
+    # --- Título
+    x0 = 90
+    dib.text((x0, 360), "Mi progreso", font=serif(118, "SemiBold"), fill=texto)
+    sub = d.get("nombre", "")
+    if d.get("inicio") is not None:
+        ini = d["inicio"]
+        sub += f" · desde {MESES_LARGOS[ini.month - 1]} {ini.year}"
+    dib.text((x0, 505), sub, font=sans(38), fill=suave)
+
+    # --- Número principal
+    peso_kg, peso_pct = d.get("peso_kg"), d.get("peso_pct")
+    if ver_kg and peso_kg is not None and abs(peso_kg) >= 0.1:
+        grande, l1, l2 = f"{'−' if peso_kg < 0 else '+'}{abs(peso_kg):.1f} kg", "de cambio en mi peso", "desde que empecé mi plan"
+    elif ver_pct and peso_pct is not None and abs(peso_pct) >= 0.1:
+        grande, l1, l2 = f"{'−' if peso_pct < 0 else '+'}{abs(peso_pct):.1f}%", "de cambio en mi peso", "desde que empecé mi plan"
+    elif d.get("racha_mejor", 0) >= 2:
+        n = d["racha_mejor"]
+        grande, l1, l2 = f"{n} días", "mi mejor racha", "cumpliendo mi menú"
+    elif d.get("comidas", 0) > 0:
+        grande, l1, l2 = f"{d['comidas']}", "comidas cumplidas", "de mi plan de alimentación"
+    else:
+        grande, l1, l2 = "Día 1", "empezando mi plan", "con mi nutrióloga"
+    fg = sans_b(210)
+    while dib.textlength(grande, font=fg) > ancho - 2 * x0 and fg.size > 90:
+        fg = sans_b(fg.size - 10)
+    dib.text((x0 - 6, 590), grande, font=fg, fill=acento)
+    dib.text((x0, 845), l1, font=sans_m(44), fill=texto)
+    dib.text((x0, 905), l2, font=sans(40), fill=suave)
+
+    # --- Mis números (estilo ranking)
+    filas = []
+    if d.get("racha_mejor"):
+        filas.append(("Racha más larga", f"{d['racha_mejor']} días"))
+    if d.get("comidas"):
+        filas.append(("Comidas cumplidas", f"{d['comidas']}"))
+    if d.get("vasos"):
+        filas.append(("Vasos de agua", f"{d['vasos']}"))
+    if ver_cintura and d.get("cintura_cm") is not None and abs(d["cintura_cm"]) >= 0.5:
+        filas.append(("Cintura", f"{'−' if d['cintura_cm'] < 0 else '+'}{abs(d['cintura_cm']):.0f} cm"))
+    if d.get("consultas"):
+        filas.append(("Consultas", f"{d['consultas']}"))
+    if d.get("dias_plan"):
+        filas.append(("Días en mi plan", f"{d['dias_plan']}"))
+    filas = filas[:5]
+
+    y = 1020
+    if filas:
+        espaciado((x0, y), "MIS NÚMEROS", sans_m(28), suave, 6)
+        y += 70
+        for i, (etiqueta, valor) in enumerate(filas, start=1):
+            dib.text((x0, y - 10), str(i), font=serif(66, "Bold"), fill=acento)
+            dib.text((x0 + 80, y + 4), etiqueta, font=sans(42), fill=texto)
+            fv = sans_b(46)
+            dib.text((ancho - x0 - dib.textlength(valor, font=fv), y), valor, font=fv, fill=texto)
+            y += 98
+            if i < len(filas):
+                dib.line([(x0 + 80, y - 22), (ancho - x0, y - 22)], fill=suave + (), width=1)
+
+    if not filas:
+        fq = serif(76, "Medium")
+        dib.text((x0, 1140), "Este es el comienzo", font=fq, fill=texto)
+        dib.text((x0, 1240), "de algo muy bueno.", font=fq, fill=texto)
+
+    # --- Logros
+    ganadas = [(dias, txt) for dias, _, txt in INSIGNIAS if d.get("racha_mejor", 0) >= dias]
+    y = max(y + 20, 1590)
+    r = 66
+    if ganadas and y + 130 + r <= 1810:
+        espaciado((x0, y), "MIS LOGROS", sans_m(28), suave, 6)
+        cx, cy = x0 + r, y + 130
+        for dias, txt in ganadas[:5]:
+            dib.ellipse((cx - r, cy - r, cx + r, cy + r), fill=rgb(c["circulo"]), outline=acento, width=4)
+            num, uni = (str(dias), "días") if dias < 30 else (("1", "mes") if dias == 30 else ("2", "meses"))
+            fn, fu = serif(52, "Bold"), sans_m(22)
+            dib.text((cx - dib.textlength(num, font=fn) / 2, cy - 48), num, font=fn, fill=acento)
+            dib.text((cx - dib.textlength(uni, font=fu) / 2, cy + 12), uni, font=fu, fill=texto)
+            cx += 2 * r + 30
+
+    # --- Pie
+    pie = "Mi Nutrición · " + MARCA_NOMBRE
+    fp = sans(28)
+    dib.text(((ancho - dib.textlength(pie, font=fp)) / 2, 1846), pie, font=fp, fill=suave)
+
+    salida = BytesIO()
+    img.convert("RGB").save(salida, format="PNG", optimize=True)
+    return salida.getvalue()
+
+
 # ================================================================ Aviso para agregar a inicio
 def tipo_dispositivo() -> str:
     try:
@@ -1988,6 +2199,33 @@ def vista_paciente():
         st.subheader("🏅 Mis logros")
         st.html(logros_html(racha_mejor, racha_actual))
         st.caption("Un día cuenta para tu racha cuando marcas al menos el 80% de tus comidas.")
+
+        st.subheader("📤 Comparte tu progreso")
+        with st.container(border=True):
+            paleta = st.segmented_control(
+                "Color de tu tarjeta", list(PALETAS_TARJETA), default="Bosque", key="paleta_tarjeta"
+            ) or "Bosque"
+            st.caption("Tú decides qué se ve. Tus datos de peso no aparecen a menos que los actives.")
+            o1, o2, o3 = st.columns(3)
+            ver_pct = o1.checkbox("% de peso", value=False, key="t_pct")
+            ver_kg = o2.checkbox("Kilos", value=False, key="t_kg")
+            ver_cin = o3.checkbox("Cintura", value=False, key="t_cin")
+            try:
+                png = tarjeta_png(datos_tarjeta(pid, p), paleta, ver_pct, ver_kg, ver_cin)
+                v1, v2 = st.columns([1, 1], vertical_alignment="center")
+                v1.image(png, use_container_width=True)
+                v2.download_button(
+                    "📥 Descargar tarjeta",
+                    png,
+                    file_name=f"Mi progreso {str(p.get('nombre', '')).split()[0].title()}.png",
+                    mime="image/png",
+                    use_container_width=True,
+                    type="primary",
+                    key="descargar_tarjeta",
+                )
+                v2.caption("Descárgala y súbela a tus historias o mándala por WhatsApp.")
+            except Exception:
+                st.caption("No pude generar la tarjeta en este momento.")
 
     # ---------------------------------------------------------- Citas
     with tab_citas:
