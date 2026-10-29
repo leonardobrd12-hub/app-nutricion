@@ -259,6 +259,15 @@ CSS_EXTRA = """<style>
   box-shadow: 0 6px 18px rgba(54,89,74,.14);
 }
 [class*="st-key-selpac_"] [data-testid="stWidgetLabel"] p { font-weight: 800 !important; color: #36594A !important; }
+/* Quitar el marco de "enfoque" que el navegador dibuja alrededor del área principal */
+[data-testid="stMain"], [data-testid="stAppViewContainer"], [data-testid="stMainBlockContainer"],
+section.main, .main, [role="tabpanel"], [data-baseweb="tab-panel"] {
+  outline: none !important;
+}
+[data-testid="stMain"]:focus, [data-testid="stMain"]:focus-visible,
+[data-testid="stAppViewContainer"]:focus, [role="tabpanel"]:focus, [role="tabpanel"]:focus-visible {
+  outline: none !important; box-shadow: none !important;
+}
 /* Etiqueta chiquita fija en la esquina con la paciente seleccionada */
 .chip-pac {
   position: fixed; left: 16px; bottom: 16px; z-index: 990;
