@@ -252,6 +252,19 @@ CSS_EXTRA = """<style>
 .hero-sub { text-align:center; color:#6b7a70; margin:.2rem 0 1.4rem; font-size:1.02rem; }
 @media (max-width: 640px) { .marca .m-nombre { font-size:2.6rem; } .marca .m-sub { letter-spacing:6px; } }
 .alerta { background:#FFF8EC; border:1px solid #F0DDB8; border-radius:14px; padding:10px 14px; margin:6px 0; }
+/* Selector de paciente fijo arriba al hacer scroll (panel) */
+[class*="st-key-selpac_"] {
+  position: sticky; top: 3.6rem; z-index: 990;
+  background: #FFFFFF; border: 1px solid #D8E5DA; border-left: 6px solid #5E8B6C;
+  border-radius: 16px; padding: 8px 14px 12px; margin-bottom: 6px;
+  box-shadow: 0 6px 18px rgba(54,89,74,.14);
+}
+[class*="st-key-selpac_"] [data-testid="stWidgetLabel"] p { font-weight: 800 !important; color: #36594A !important; }
+/* Si Streamlit envuelve el contenedor, el envoltorio es el que debe quedarse fijo */
+[data-testid="stLayoutWrapper"]:has(> [class*="st-key-selpac_"]),
+[data-testid="stElementContainer"]:has(> [class*="st-key-selpac_"]) {
+  position: sticky; top: 3.6rem; z-index: 990;
+}
 /* Pestañas principales en forma de cápsula (selectores estables por rol) */
 [data-testid="stTabs"] [role="tablist"] {
   display:flex; flex-wrap:wrap; gap:10px !important; background:transparent !important;
@@ -410,6 +423,9 @@ header[data-testid="stHeader"] { background:transparent !important; }
 [data-testid="stTabs"] [role="tab"][aria-selected="true"] { background:#6FA07E !important; border-color:#6FA07E !important; }
 [data-testid="stTabs"] [role="tab"][aria-selected="true"] p { color:#10251A !important; }
 [data-testid="stTabs"] [role="tablist"] { background:transparent !important; }
+[class*="st-key-selpac_"] { background:#222D27 !important; border-color:#3D5045 !important;
+  border-left-color:#6FA07E !important; box-shadow:0 6px 18px rgba(0,0,0,.35) !important; }
+[class*="st-key-selpac_"] [data-testid="stWidgetLabel"] p { color:#BFE3CB !important; }
 </style>"""
 
 
@@ -2640,12 +2656,14 @@ def elegir_paciente(pacientes: pd.DataFrame, clave: str):
         st.info("Aún no hay pacientes.")
         return None
     nombres = dict(zip(pacientes["id_paciente"], pacientes["nombre"]))
-    return st.selectbox(
-        "Paciente",
-        pacientes["id_paciente"].tolist(),
-        format_func=lambda x: f"{x} · {nombres.get(x, '')}",
-        key=clave,
-    )
+    # Contenedor "pegajoso": se queda visible arriba al bajar por la página
+    with st.container(key=f"selpac_{clave}"):
+        return st.selectbox(
+            "👤 Paciente",
+            pacientes["id_paciente"].tolist(),
+            format_func=lambda x: f"{x} · {nombres.get(x, '')}",
+            key=clave,
+        )
 
 
 def panel_nutriologa():
