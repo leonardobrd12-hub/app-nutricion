@@ -254,17 +254,20 @@ CSS_EXTRA = """<style>
 .alerta { background:#FFF8EC; border:1px solid #F0DDB8; border-radius:14px; padding:10px 14px; margin:6px 0; }
 /* Selector de paciente fijo arriba al hacer scroll (panel) */
 [class*="st-key-selpac_"] {
-  position: sticky; top: 3.6rem; z-index: 990;
   background: #FFFFFF; border: 1px solid #D8E5DA; border-left: 6px solid #5E8B6C;
   border-radius: 16px; padding: 8px 14px 12px; margin-bottom: 6px;
   box-shadow: 0 6px 18px rgba(54,89,74,.14);
 }
 [class*="st-key-selpac_"] [data-testid="stWidgetLabel"] p { font-weight: 800 !important; color: #36594A !important; }
-/* Si Streamlit envuelve el contenedor, el envoltorio es el que debe quedarse fijo */
-[data-testid="stLayoutWrapper"]:has(> [class*="st-key-selpac_"]),
-[data-testid="stElementContainer"]:has(> [class*="st-key-selpac_"]) {
-  position: sticky; top: 3.6rem; z-index: 990;
+/* Etiqueta chiquita fija en la esquina con la paciente seleccionada */
+.chip-pac {
+  position: fixed; left: 16px; bottom: 16px; z-index: 990;
+  background: #5E8B6C; color: #FFFFFF !important; text-decoration: none !important;
+  border-radius: 999px; padding: 8px 14px; font-weight: 700; font-size: .88rem;
+  box-shadow: 0 6px 16px rgba(54,89,74,.3); max-width: 70vw;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.chip-pac:hover { background: #36594A; }
 /* Pestañas principales en forma de cápsula (selectores estables por rol) */
 [data-testid="stTabs"] [role="tablist"] {
   display:flex; flex-wrap:wrap; gap:10px !important; background:transparent !important;
@@ -426,6 +429,7 @@ header[data-testid="stHeader"] { background:transparent !important; }
 [class*="st-key-selpac_"] { background:#222D27 !important; border-color:#3D5045 !important;
   border-left-color:#6FA07E !important; box-shadow:0 6px 18px rgba(0,0,0,.35) !important; }
 [class*="st-key-selpac_"] [data-testid="stWidgetLabel"] p { color:#BFE3CB !important; }
+.chip-pac { background:#6FA07E !important; color:#10251A !important; }
 </style>"""
 
 
@@ -2651,19 +2655,26 @@ def seccion_pagos(pacientes: pd.DataFrame, nombres: dict):
 
 
 # ================================================================ Panel general
-def elegir_paciente(pacientes: pd.DataFrame, clave: str):
+def elegir_paciente(pacientes: pd.DataFrame, clave: str, etiqueta_fija: bool = False):
     if pacientes.empty:
         st.info("Aún no hay pacientes.")
         return None
     nombres = dict(zip(pacientes["id_paciente"], pacientes["nombre"]))
-    # Contenedor "pegajoso": se queda visible arriba al bajar por la página
+    st.html(f'<div id="ancla_{clave}"></div>')
     with st.container(key=f"selpac_{clave}"):
-        return st.selectbox(
+        pid = st.selectbox(
             "👤 Paciente",
             pacientes["id_paciente"].tolist(),
             format_func=lambda x: f"{x} · {nombres.get(x, '')}",
             key=clave,
         )
+    if etiqueta_fija and pid:
+        # Se queda en la esquina al bajar; al tocarla regresa al selector
+        st.html(
+            f'<a class="chip-pac" href="#ancla_{clave}" title="Cambiar de paciente">'
+            f'👤 {html.escape(str(nombres.get(pid, pid)))}</a>'
+        )
+    return pid
 
 
 def panel_nutriologa():
@@ -2960,7 +2971,7 @@ def panel_nutriologa():
 
     # ---------------------------------------------------------- Mediciones
     with tab_med:
-        pid = elegir_paciente(pacientes, "pac_med")
+        pid = elegir_paciente(pacientes, "pac_med", etiqueta_fija=True)
         if pid:
             # Cumplimiento de los últimos 7 días (comidas que la paciente marcó)
             por_fecha, vigente = menus_de(pid)
@@ -3048,7 +3059,7 @@ def panel_nutriologa():
 
     # ---------------------------------------------------------- Menús
     with tab_menu:
-        pid = elegir_paciente(pacientes, "pac_menu")
+        pid = elegir_paciente(pacientes, "pac_menu", etiqueta_fija=True)
         if pid:
             nombre_pac = str(nombres.get(pid, ""))
             sub_captura, sub_pdf = st.tabs(["✏️ Capturar menú", "📄 PDF de Canva"])
