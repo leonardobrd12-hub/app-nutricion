@@ -449,10 +449,17 @@ COLUMNAS_PACIENTE_EXTRA = [
 METRICAS = {
     "Peso (kg)": "peso_kg",
     "Grasa (%)": "grasa_pct",
-    "Cintura (cm)": "cintura_cm",
+    "Músculo (%)": "musculo_pct",
+    "Circunferencia abdominal (cm)": "cintura_cm",
     "Cadera (cm)": "cadera_cm",
-    "Músculo (kg)": "musculo_kg",
+    "Músculo (kg)": "musculo_kg",  # registros anteriores
 }
+
+
+def metricas_con_datos(med: pd.DataFrame) -> list:
+    """Solo las métricas que esa paciente sí tiene capturadas."""
+    con = [k for k, c in METRICAS.items() if c in med.columns and med[c].notna().any()]
+    return con or ["Peso (kg)"]
 # Hojas que la app crea sola si no existen
 HOJAS_NUEVAS = {
     "Bloqueos": ["fecha", "hora", "motivo"],
@@ -792,7 +799,7 @@ def mediciones_de(pid: str) -> pd.DataFrame:
         return med
     med["fecha"] = pd.to_datetime(med["fecha"], errors="coerce")
     for c in METRICAS.values():
-        med[c] = a_numero(med[c])
+        med[c] = a_numero(med[c]) if c in med.columns else float("nan")
     return med.dropna(subset=["fecha"]).sort_values("fecha")
 
 
@@ -1785,7 +1792,7 @@ def tarjeta_png(d: dict, paleta: str, ver_pct: bool, ver_kg: bool, ver_cintura: 
     if d.get("vasos"):
         filas.append(("Vasos de agua", f"{d['vasos']}"))
     if ver_cintura and d.get("cintura_cm") is not None and abs(d["cintura_cm"]) >= 0.5:
-        filas.append(("Cintura", f"{'−' if d['cintura_cm'] < 0 else '+'}{abs(d['cintura_cm']):.0f} cm"))
+        filas.append(("Circ. abdominal", f"{'−' if d['cintura_cm'] < 0 else '+'}{abs(d['cintura_cm']):.0f} cm"))
     if d.get("consultas"):
         filas.append(("Consultas", f"{d['consultas']}"))
     if d.get("dias_plan"):
@@ -2223,7 +2230,7 @@ def vista_paciente():
             tarjetas = [
                 ("Peso (kg)", "peso_kg", "off"),
                 ("Grasa (%)", "grasa_pct", "inverse"),
-                ("Cintura (cm)", "cintura_cm", "inverse"),
+                ("Circ. abdominal (cm)", "cintura_cm", "inverse"),
             ]
             for col, (nombre, c, color) in zip(st.columns(3), tarjetas):
                 if pd.isna(ultima[c]) or pd.isna(primera[c]):
@@ -2253,7 +2260,7 @@ def vista_paciente():
             if datos:
                 st.html('<div class="meta-card">' + "<br>".join(datos) + "</div>")
 
-            elegida = st.selectbox("Ver evolución de", list(METRICAS.keys()))
+            elegida = st.selectbox("Ver evolución de", metricas_con_datos(med))
             st.altair_chart(
                 grafica_metrica(
                     med, elegida, METRICAS[elegida], meta if METRICAS[elegida] == "peso_kg" else None
@@ -2280,7 +2287,7 @@ def vista_paciente():
             o1, o2, o3 = st.columns(3)
             ver_pct = o1.checkbox("% de peso", value=False, key="t_pct")
             ver_kg = o2.checkbox("Kilos", value=False, key="t_kg")
-            ver_cin = o3.checkbox("Cintura", value=False, key="t_cin")
+            ver_cin = o3.checkbox("Circ. abdominal", value=False, key="t_cin")
             try:
                 png = tarjeta_png(datos_tarjeta(pid, p), paleta, ver_pct, ver_kg, ver_cin)
                 nombre_archivo = f"Mi progreso {str(p.get('nombre', '')).split()[0].title()}.png"
@@ -2962,9 +2969,9 @@ def panel_nutriologa():
                 c1, c2, c3 = st.columns(3)
                 peso = c1.number_input("Peso (kg)", min_value=0.0, step=0.1, value=None)
                 grasa = c2.number_input("Grasa (%)", min_value=0.0, step=0.1, value=None)
-                musculo = c3.number_input("Músculo (kg)", min_value=0.0, step=0.1, value=None)
+                musculo = c3.number_input("Músculo (%)", min_value=0.0, max_value=100.0, step=0.1, value=None)
                 c4, c5 = st.columns(2)
-                cintura = c4.number_input("Cintura (cm)", min_value=0.0, step=0.5, value=None)
+                cintura = c4.number_input("Circunferencia abdominal (cm)", min_value=0.0, step=0.5, value=None)
                 cadera = c5.number_input("Cadera (cm)", min_value=0.0, step=0.5, value=None)
                 notas = st.text_area("Notas para la paciente (ella las verá)")
                 guardar = st.form_submit_button("Guardar medición", type="primary")
@@ -2982,7 +2989,7 @@ def panel_nutriologa():
                         "cintura_cm": o_vacio(cintura),
                         "cadera_cm": o_vacio(cadera),
                         "grasa_pct": o_vacio(grasa),
-                        "musculo_kg": o_vacio(musculo),
+                        "musculo_pct": o_vacio(musculo),
                         "notas": notas.strip(),
                     }])
                     st.toast("Medición guardada ✅")
@@ -3005,7 +3012,7 @@ def panel_nutriologa():
                     resumen.append(f"meta {meta:g} kg")
                 if resumen:
                     st.caption(" · ".join(resumen))
-                elegida = st.selectbox("Ver evolución de", list(METRICAS.keys()), key="met_admin")
+                elegida = st.selectbox("Ver evolución de", metricas_con_datos(med), key="met_admin")
                 st.altair_chart(
                     grafica_metrica(
                         med, elegida, METRICAS[elegida], meta if METRICAS[elegida] == "peso_kg" else None
@@ -3014,6 +3021,11 @@ def panel_nutriologa():
                 )
                 tabla = med.drop(columns=["id_paciente"]).iloc[::-1].copy()
                 tabla["fecha"] = tabla["fecha"].dt.strftime("%d/%m/%Y")
+                nombres_col = {"fecha": "Fecha", "notas": "Notas", **{c: k for k, c in METRICAS.items()}}
+                columnas = ["fecha"] + [c for c in METRICAS.values() if c in tabla and tabla[c].notna().any()]
+                if "notas" in tabla:
+                    columnas.append("notas")
+                tabla = tabla[columnas].rename(columns=nombres_col)
                 st.dataframe(tabla, hide_index=True, use_container_width=True)
 
     # ---------------------------------------------------------- Menús
