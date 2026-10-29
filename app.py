@@ -2642,7 +2642,7 @@ def elegir_paciente(pacientes: pd.DataFrame, clave: str):
 
 
 def panel_nutriologa():
-    col_titulo, col_tema, col_salir = st.columns([6, 1, 1], vertical_alignment="center")
+    col_titulo, col_tema, col_act, col_salir = st.columns([6, 1, 1, 1], vertical_alignment="center")
     with col_titulo:
         st.html(
             '<div class="saludo" style="margin:0;display:flex;align-items:center;gap:22px;flex-wrap:wrap">'
@@ -2650,6 +2650,12 @@ def panel_nutriologa():
         )
     with col_tema:
         interruptor_tema("panel")
+    with col_act:
+        if st.button("🔄", key="actualizar_panel", help="Volver a leer los datos del Google Sheet"):
+            for hoja_n in ["Pacientes", "Mediciones", "Menus", "Horarios", "Citas", *HOJAS_NUEVAS]:
+                invalidar(hoja_n)
+            st.toast("Datos actualizados")
+            st.rerun()
     with col_salir:
         boton_salir("salir_admin")
 
@@ -2786,6 +2792,9 @@ def panel_nutriologa():
 
     # ---------------------------------------------------------- Pacientes
     with tab_pac:
+        aviso = st.session_state.pop("aviso_panel", None)
+        if aviso:
+            st.success(aviso)
         st.subheader("Mis pacientes")
         if not pacientes.empty:
             columnas = [c for c in ["id_paciente", "nombre", "telefono", "objetivo", "meta_peso", "activo"]
@@ -2832,10 +2841,15 @@ def panel_nutriologa():
                         "cambiar_pwd": "SI",
                         "acepto_aviso": "",
                     }])
-                    st.success(
-                        f"Paciente creada. Compártele su código **{nuevo}** y su contraseña temporal; "
-                        "al entrar se le pedirá crear la suya."
+                    st.session_state.aviso_panel = (
+                        f"Paciente creada: **{nombre.strip()}**. Compártele su código **{nuevo}** y su "
+                        "contraseña temporal; al entrar se le pedirá crear la suya. "
+                        "Ya está seleccionada en Mediciones y Menús."
                     )
+                    # Dejarla seleccionada en las demás pestañas
+                    for clave in ("pac_med", "pac_menu", "pac_editar", "pac_notas"):
+                        st.session_state[clave] = nuevo
+                    st.rerun()
 
         with st.expander("✏️ Editar paciente"):
             pid = elegir_paciente(pacientes, "pac_editar")
