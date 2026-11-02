@@ -720,14 +720,15 @@ def ahora_mx() -> datetime:
 def citas_limpias(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if df.empty:
-        return pd.DataFrame(
-            columns=["id_cita", "id_paciente", "fecha", "hora", "estado", "notas", "inicio"]
-        )
+        # Sin citas: tabla vacía pero con "inicio" como fecha, para que los filtros no fallen
+        vacia = pd.DataFrame(columns=["id_cita", "id_paciente", "fecha", "hora", "estado", "notas"], dtype=str)
+        vacia["inicio"] = pd.Series(dtype="datetime64[ns]")
+        return vacia
     df["id_paciente"] = df["id_paciente"].astype(str).str.strip().str.upper()
     df["fecha"] = df["fecha"].apply(fecha_iso)
     df["hora"] = df["hora"].apply(hora_hhmm)
     df["estado"] = df["estado"].astype(str).str.strip().str.lower()
-    df["inicio"] = pd.to_datetime(df["fecha"] + " " + df["hora"], errors="coerce")
+    df["inicio"] = pd.to_datetime(df["fecha"].astype(str) + " " + df["hora"].astype(str), errors="coerce")
     return df
 
 
