@@ -664,6 +664,43 @@ def borrar_donde(nombre: str, **campos):
     invalidar(nombre)
 
 
+def borrar_filas_de(nombre: str, pid: str) -> int:
+    """Borra todas las filas de una paciente en una hoja, en UNA sola llamada a Google."""
+    try:
+        ws = reintentar(_pestana, nombre)
+    except gspread.WorksheetNotFound:
+        return 0
+    vivo = _vivo(nombre)
+    if vivo.empty or "id_paciente" not in vivo.columns:
+        return 0
+    indices = sorted(vivo.index[vivo["id_paciente"].astype(str).str.strip().str.upper() == pid].tolist())
+    if not indices:
+        return 0
+    grupos = []  # filas seguidas se borran juntas
+    for i in indices:
+        if grupos and i == grupos[-1][1]:
+            grupos[-1][1] = i + 1
+        else:
+            grupos.append([i, i + 1])
+    solicitudes = [
+        {"deleteDimension": {"range": {"sheetId": ws.id, "dimension": "ROWS",
+                                       "startIndex": a + 1, "endIndex": b + 1}}}
+        for a, b in reversed(grupos)  # de abajo hacia arriba para no mover las demás
+    ]
+    reintentar(conectar().batch_update, {"requests": solicitudes})
+    invalidar(nombre)
+    return len(indices)
+
+
+def eliminar_paciente(pid: str, borrar_pagos: bool) -> dict:
+    hojas_paciente = ["Mediciones", "Menus", "Citas", "Registro", "Agua", "NotasPrivadas"]
+    if borrar_pagos:
+        hojas_paciente.append("Pagos")
+    borradas = {h: borrar_filas_de(h, pid) for h in hojas_paciente}
+    borradas["Pacientes"] = borrar_filas_de("Pacientes", pid)
+    return borradas
+
+
 def borrar_menu(pid: str, fecha: str):
     """Borra el menú de una paciente con esa fecha_inicio (leyendo el Sheet en vivo)."""
     ws = hoja("Menus")
@@ -1083,6 +1120,21 @@ def texto_de(items: pd.DataFrame) -> str:
     return "\n\n".join(bloques)
 
 
+def _inicial(clave: str, valor):
+    """Pone el valor inicial de un campo SOLO la primera vez; después manda lo que escriba la usuaria."""
+    if clave not in st.session_state:
+        st.session_state[clave] = valor
+
+
+def vaciar_cuadros(k: str):
+    """Deja en blanco todos los cuadros del menú que se está editando."""
+    for clave in list(st.session_state.keys()):
+        if isinstance(clave, str) and (
+            clave.startswith(f"c_{k}_") or clave.startswith(f"todos_{k}_") or clave == f"indic_{k}"
+        ):
+            st.session_state[clave] = ""
+
+
 def capturar_semana(actual: pd.DataFrame, tiempos: list[str], k: str) -> list[dict]:
     """Dibuja la semana como en Canva y devuelve las filas a guardar."""
     st.html(CSS_CUADRICULA_OSCURO if es_oscuro() else CSS_CUADRICULA)
@@ -1103,25 +1155,29 @@ def capturar_semana(actual: pd.DataFrame, tiempos: list[str], k: str) -> list[di
         cols = st.columns([1.1, 7] if igual else anchos, gap="small")
         with cols[0]:
             st.html(f'<div class="g-comida">{comida.upper()}</div>')
-            st.toggle("Igual toda la semana", value=solo_todos, key=clave_igual)
+            _inicial(clave_igual, solo_todos)
+            st.toggle("Igual toda la semana", key=clave_igual)
+            _inicial(f"kcal_{k}_{comida}", kcal_de(de_c, comida))
             kcal = st.number_input(
-                "kcal", min_value=0, step=10, value=kcal_de(de_c, comida),
+                "kcal", min_value=0, step=10,
                 key=f"kcal_{k}_{comida}", placeholder="kcal", label_visibility="collapsed",
             )
             kcal = kcal or ""
 
         if igual:
             inicial = texto_de(de_c[de_c["dia"] == "Todos"]) or texto_de(items_de(de_c, "Lunes", comida))
+            _inicial(f"todos_{k}_{comida}", inicial)
             t = cols[1].text_area(
-                comida, label_visibility="collapsed", value=inicial, height=110, key=f"todos_{k}_{comida}",
+                comida, label_visibility="collapsed", height=110, key=f"todos_{k}_{comida}",
             )
             if t.strip():
                 filas.append({"dia": "Todos", "comida": comida, "titulo": "", "platillo": t.strip(),
                               "notas": "", "kcal": kcal})
         else:
             for col, d in zip(cols[1:], DIAS):
+                _inicial(f"c_{k}_{comida}_{d}", texto_de(items_de(de_c, d, comida)))
                 t = col.text_area(
-                    f"{comida} {d}", label_visibility="collapsed", value=texto_de(items_de(de_c, d, comida)), height=170,
+                    f"{comida} {d}", label_visibility="collapsed", height=170,
                     key=f"c_{k}_{comida}_{d}",
                     placeholder="OMELETTE\n2 huevos + espinacas\n\n2 tortillas" if d == "Lunes" else "",
                 )
@@ -1133,8 +1189,9 @@ def capturar_semana(actual: pd.DataFrame, tiempos: list[str], k: str) -> list[di
     # Indicaciones (agua, etc.)
     cols = st.columns([1.1, 7], gap="small")
     cols[0].html('<div class="g-comida">INDICACIONES</div>')
+    _inicial(f"indic_{k}", texto_de(actual[actual["comida"] == "Indicaciones"]))
     t = cols[1].text_area(
-        "Indicaciones", label_visibility="collapsed", value=texto_de(actual[actual["comida"] == "Indicaciones"]), height=80,
+        "Indicaciones", label_visibility="collapsed", height=80,
         key=f"indic_{k}", placeholder="2.8 litros de agua al día (11 vasos aprox)…",
     )
     if t.strip():
@@ -2953,6 +3010,35 @@ def panel_nutriologa():
                     actualizar_celda("Pacientes", idx, "activo", "NO" if activa else "SI")
                     st.rerun()
 
+                st.divider()
+                if st.toggle("🗑️ Eliminar esta paciente", key=f"mostrar_borrar_{pid}"):
+                    nombre_p = str(fila_p.get("nombre", pid))
+                    st.error(
+                        f"Se borrará **{nombre_p}** de forma **permanente**: su ficha, mediciones, "
+                        "menús, citas, registro de comidas y agua, y notas privadas. No se puede deshacer."
+                    )
+                    st.caption(
+                        "Si solo quieres que ya no entre a la app, mejor usa **Desactivar acceso**: "
+                        "así conservas su historial."
+                    )
+                    borrar_pagos = st.checkbox(
+                        "También borrar sus pagos (si no, se conservan para tus cuentas)",
+                        value=False, key=f"borrar_pagos_{pid}",
+                    )
+                    confirmacion = st.text_input(
+                        f"Para confirmar, escribe su código: {pid}", key=f"confirmar_borrar_{pid}"
+                    )
+                    if st.button(
+                        "Eliminar definitivamente", type="primary", key=f"borrar_{pid}",
+                        disabled=confirmacion.strip().upper() != pid,
+                    ):
+                        with st.spinner("Eliminando…"):
+                            eliminar_paciente(pid, borrar_pagos)
+                        for clave in ("pac_med", "pac_menu", "pac_editar", "pac_notas"):
+                            st.session_state.pop(clave, None)
+                        st.session_state.aviso_panel = f"Se eliminó a **{nombre_p}** ({pid}) y sus datos."
+                        st.rerun()
+
         with st.expander("📝 Notas privadas"):
             st.caption("Solo tú las ves.")
             pid = elegir_paciente(pacientes, "pac_notas")
@@ -3097,7 +3183,14 @@ def panel_nutriologa():
                 )
                 tiempos = [c for c in ORDEN_COMIDAS[:-1] if c in elegidos]
 
-                filas = capturar_semana(actual, tiempos, f"{pid}_{version}")
+                ronda = st.session_state.get(f"ronda_menu_{pid}", 0)
+                k_menu = f"{pid}_{version}_{ronda}"
+                filas = capturar_semana(actual, tiempos, k_menu)
+                st.button(
+                    "🧹 Vaciar todos los cuadros", key=f"vaciar_{k_menu}",
+                    on_click=vaciar_cuadros, args=(k_menu,),
+                    help="Deja la semana en blanco para escribir un menú nuevo desde cero",
+                )
 
                 total = sum(
                     {f["comida"]: f["kcal"] for f in filas if f.get("kcal")}.values()
@@ -3125,8 +3218,24 @@ def panel_nutriologa():
                         agregar_filas("Menus", [
                             {"id_paciente": pid, "fecha_inicio": str(inicio), **f} for f in filas
                         ])
+                        st.session_state[f"ronda_menu_{pid}"] = ronda + 1  # recargar los cuadros
                         st.toast("Menú guardado ✅")
                         st.rerun()
+
+                if version != "nuevo":
+                    if st.toggle(
+                        f"🗑️ Borrar el menú guardado del {pd.to_datetime(version):%d/%m/%Y}",
+                        key=f"mostrar_borrar_menu_{k_menu}",
+                    ):
+                        st.warning(
+                            "Se borra ese menú de forma permanente. Si la paciente tiene un menú anterior, "
+                            "volverá a ver ese."
+                        )
+                        if st.button("Sí, borrar este menú", type="primary", key=f"borrar_menu_{k_menu}"):
+                            borrar_menu(pid, version)
+                            st.session_state[f"ronda_menu_{pid}"] = ronda + 1
+                            st.toast("Menú borrado")
+                            st.rerun()
 
                 if version != "nuevo":
                     fila_p = pacientes[pacientes["id_paciente"] == pid].iloc[0].to_dict()
