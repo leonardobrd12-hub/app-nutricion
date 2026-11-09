@@ -1095,6 +1095,9 @@ textarea { font-size:13.5px !important; line-height:1.4 !important; }
   -webkit-text-fill-color:#33433A !important;
 }
 [data-testid="stTextArea"] textarea { border-radius:12px !important; }
+[data-testid="stTextArea"] textarea::placeholder {
+  color:#B8AE9C !important; -webkit-text-fill-color:#B8AE9C !important; opacity:1 !important;
+}
 </style>"""
 
 CSS_CUADRICULA_OSCURO = CSS_CUADRICULA.replace(
@@ -1179,7 +1182,6 @@ def capturar_semana(actual: pd.DataFrame, tiempos: list[str], k: str) -> list[di
                 t = col.text_area(
                     f"{comida} {d}", label_visibility="collapsed", height=170,
                     key=f"c_{k}_{comida}_{d}",
-                    placeholder="OMELETTE\n2 huevos + espinacas\n\n2 tortillas" if d == "Lunes" else "",
                 )
                 if t.strip():
                     filas.append({"dia": d, "comida": comida, "titulo": "", "platillo": t.strip(),
@@ -1192,7 +1194,7 @@ def capturar_semana(actual: pd.DataFrame, tiempos: list[str], k: str) -> list[di
     _inicial(f"indic_{k}", texto_de(actual[actual["comida"] == "Indicaciones"]))
     t = cols[1].text_area(
         "Indicaciones", label_visibility="collapsed", height=80,
-        key=f"indic_{k}", placeholder="2.8 litros de agua al día (11 vasos aprox)…",
+        key=f"indic_{k}",
     )
     if t.strip():
         filas.append({"dia": "Todos", "comida": "Indicaciones", "titulo": "", "platillo": t.strip(), "notas": ""})
