@@ -471,7 +471,7 @@ MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "
 MESES_LARGOS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
                 "septiembre", "octubre", "noviembre", "diciembre"]
 ORDEN_COMIDAS = ["Desayuno", "Almuerzo", "Colación 1", "Comida", "Colación 2", "Cena", "Indicaciones"]
-COLUMNAS_MENU = ["dia", "comida", "titulo", "platillo", "notas", "kcal"]
+COLUMNAS_MENU = ["dia", "comida", "titulo", "platillo", "notas", "kcal", "kcal_dia"]
 COLUMNAS_PACIENTE_EXTRA = [
     "meta_peso", "cambiar_pwd", "acepto_aviso", "estatura_m", "fecha_nacimiento", "meta_agua"
 ]
@@ -818,45 +818,83 @@ def slug(texto: str) -> str:
 
 
 # ================================================================ Gráfica
+def unidad_de(nombre: str) -> str:
+    m = re.search(r"\(([^)]*)\)", nombre)
+    return m.group(1) if m else ""
+
+
+def titulo_metrica(nombre: str) -> str:
+    return re.sub(r"\s*\([^)]*\)", "", nombre).strip()
+
+
 def grafica_metrica(med: pd.DataFrame, nombre: str, columna: str, meta=None):
-    base = alt.Chart(med.dropna(subset=[columna])).encode(
-        x=alt.X("fecha:T", title=None, axis=alt.Axis(format="%d %b", tickCount=6)),
+    """Un punto por consulta, separados de forma pareja (no por días)."""
+    d = med.dropna(subset=[columna])[["fecha", columna]].copy()
+    etiquetas, vistas = [], {}
+    for f in d["fecha"]:
+        e = f"{f.day} {MESES[f.month - 1]} {str(f.year)[2:]}"
+        vistas[e] = vistas.get(e, 0) + 1
+        etiquetas.append(e if vistas[e] == 1 else f"{e} ({vistas[e]})")
+    d["consulta"] = etiquetas
+    orden = list(d["consulta"])
+    oscuro = es_oscuro()
+    base = alt.Chart(d).encode(
+        x=alt.X("consulta:O", sort=orden, title=None,
+                axis=alt.Axis(labelAngle=-35 if len(orden) > 6 else 0, labelOverlap=False)),
         y=alt.Y(f"{columna}:Q", title=None, scale=alt.Scale(zero=False, nice=True)),
         tooltip=[
-            alt.Tooltip("fecha:T", title="Fecha", format="%d/%m/%Y"),
-            alt.Tooltip(f"{columna}:Q", title=nombre),
+            alt.Tooltip("consulta:O", title="Consulta"),
+            alt.Tooltip(f"{columna}:Q", title=nombre, format=".1f"),
         ],
     )
-    area = base.mark_area(
-        interpolate="monotone",
-        line=False,
-        color=alt.Gradient(
-            gradient="linear",
-            stops=[alt.GradientStop(color="#1B2420" if es_oscuro() else "#FFFFFF", offset=0),
-                   alt.GradientStop(color="#2F4A3B" if es_oscuro() else VERDE_CLARO, offset=1)],
-            x1=1, x2=1, y1=1, y2=0,
-        ),
-    )
-    linea = base.mark_line(interpolate="monotone", color=VERDE, strokeWidth=3)
-    puntos = base.mark_circle(size=90, color=VERDE, stroke="#fff", strokeWidth=2, opacity=1)
-    capas = area + linea + puntos
+    linea = base.mark_line(color=VERDE, strokeWidth=3)
+    puntos = base.mark_circle(size=95, color=VERDE, stroke="#1B2420" if oscuro else "#fff",
+                              strokeWidth=2, opacity=1)
+    valores = base.mark_text(dy=-14, fontSize=11, fontWeight="bold", font="Nunito",
+                             color="#CFE6D5" if oscuro else "#36594A").encode(
+        text=alt.Text(f"{columna}:Q", format=".1f"))
+    capas = linea + puntos + valores
     if meta is not None:
         df_meta = pd.DataFrame({"meta": [meta]})
         regla = alt.Chart(df_meta).mark_rule(
             color="#C9A66B", strokeDash=[6, 5], strokeWidth=2
         ).encode(y="meta:Q", tooltip=[alt.Tooltip("meta:Q", title="Meta")])
-        etiqueta = alt.Chart(df_meta).mark_text(
-            align="left", dx=6, dy=-9, color="#A8864B", font="Nunito", fontWeight="bold"
-        ).encode(y="meta:Q", x=alt.value(0), text=alt.value(f"Meta: {meta:g}"))
-        capas = capas + regla + etiqueta
+        capas = capas + regla
     return (
-        capas.properties(height=280, background="transparent")
+        capas.properties(height=210, background="transparent")
         .configure_view(strokeWidth=0)
         .configure_axis(
-            labelColor="#9FB3A6" if es_oscuro() else "#6b7a70", labelFont="Nunito", labelFontSize=12,
-            gridColor="#2E3A33" if es_oscuro() else "#E8EFE8", domain=False, ticks=False,
+            labelColor="#9FB3A6" if oscuro else "#6b7a70", labelFont="Nunito", labelFontSize=12,
+            gridColor="#2E3A33" if oscuro else "#E8EFE8", domain=False, ticks=False,
         )
     )
+
+
+def graficas_apiladas(med: pd.DataFrame, meta=None):
+    """Todas las medidas capturadas, una debajo de otra (sin altura)."""
+    for nombre in metricas_con_datos(med):
+        col = METRICAS[nombre]
+        if col not in med.columns:
+            continue
+        serie = med[col].dropna()
+        if serie.empty:
+            continue
+        uni = unidad_de(nombre)
+        uni = uni if uni == "%" else f" {uni}"
+        ini, fin = float(serie.iloc[0]), float(serie.iloc[-1])
+        if len(serie) >= 2:
+            dif = fin - ini
+            signo = "−" if dif < 0 else "+"
+            txt = (f"{ini:.1f}{uni} → {fin:.1f}{uni} "
+                   f'<span style="color:{VERDE};font-weight:800">({signo}{abs(dif):.1f}{uni})</span>')
+        else:
+            txt = f"{fin:.1f}{uni}"
+        st.html(f'<div style="font-size:15.5px;margin:18px 0 0 2px">'
+                f'<b>{html.escape(titulo_metrica(nombre))}:</b> {txt}</div>')
+        st.altair_chart(
+            grafica_metrica(med, nombre, col, meta if col == "peso_kg" else None),
+            use_container_width=True,
+        )
 
 
 def mediciones_de(pid: str) -> pd.DataFrame:
@@ -1046,21 +1084,19 @@ def menu_semana_html(m: pd.DataFrame) -> str:
             clase = ' class="junta"' if span > 1 else ""
             tds += f'<td colspan="{span}"{clase}>{celdas[i]}</td>'
             i = j + 1
-        k = kcal_de(m, comida)
-        etiqueta = comida + (
-            f'<div style="font-size:11px;font-weight:600;text-transform:none;opacity:.85;'
-            f'margin-top:2px">{k} kcal</div>' if k else ""
-        )
-        filas.append(f'<tr><td class="comida">{etiqueta}</td>{tds}</tr>')
-    indic = m[m["comida"] == "Indicaciones"]
-    if not indic.empty:
-        filas.append(
-            f'<tr class="indic"><td class="comida">Indicaciones</td>'
-            f'<td colspan="7">{celda_html(indic)}</td></tr>'
-        )
+        filas.append(f'<tr><td class="comida">{comida}</td>{tds}</tr>')
+    for extra, titulo in (("Indicaciones", "Indicaciones"), ("Agua", "Consumo de agua")):
+        bloque = m[m["comida"] == extra]
+        if not bloque.empty:
+            filas.append(
+                f'<tr class="indic"><td class="comida">{titulo}</td>'
+                f'<td colspan="7">{celda_html(bloque)}</td></tr>'
+            )
     cabecera = "<tr><th>COMIDA</th>" + "".join(f"<th>{d.upper()}</th>" for d in DIAS) + "</tr>"
+    kd = kcal_dia_de(m)
+    arriba = f'<div class="kcal-dia">🔥 Plan de <b>{kd:,} kcal</b> diarias</div>' if kd else ""
     return (
-        f'{CSS_MENU}<div class="menu-wrap"><table class="menu"><thead>{cabecera}</thead>'
+        f'{CSS_MENU}{arriba}<div class="menu-wrap"><table class="menu"><thead>{cabecera}</thead>'
         f'<tbody>{"".join(filas)}</tbody></table></div>'
     )
 
@@ -1072,13 +1108,21 @@ def menu_dia_html(m: pd.DataFrame, dia: str) -> str:
         items = items_de(m, dia, comida)
         if not items.empty:
             tarjetas += f'<div class="card-menu"><div class="c-com">{comida}</div>{celda_html(items)}</div>'
-    indic = m[m["comida"] == "Indicaciones"]
-    if not indic.empty:
-        tarjetas += (
-            f'<div class="card-menu indic"><div class="c-com">Indicaciones</div>'
-            f"{celda_html(indic)}</div>"
-        )
+    tarjetas += extras_html(m)
     return f'{CSS_MENU}<div class="dia-head">{dia}</div>{tarjetas}'
+
+
+def extras_html(m: pd.DataFrame) -> str:
+    """Tarjetas de Indicaciones y Consumo de agua."""
+    salida = ""
+    for extra, titulo in (("Indicaciones", "Indicaciones"), ("Agua", "💧 Consumo de agua")):
+        bloque = m[m["comida"] == extra]
+        if not bloque.empty:
+            salida += (
+                f'<div class="card-menu indic"><div class="c-com">{titulo}</div>'
+                f"{celda_html(bloque)}</div>"
+            )
+    return salida
 
 
 CSS_CUADRICULA = """<style>
@@ -1133,7 +1177,8 @@ def vaciar_cuadros(k: str):
     """Deja en blanco todos los cuadros del menú que se está editando."""
     for clave in list(st.session_state.keys()):
         if isinstance(clave, str) and (
-            clave.startswith(f"c_{k}_") or clave.startswith(f"todos_{k}_") or clave == f"indic_{k}"
+            clave.startswith(f"c_{k}_") or clave.startswith(f"todos_{k}_")
+            or clave in (f"indic_{k}", f"agua_{k}")
         ):
             st.session_state[clave] = ""
 
@@ -1160,12 +1205,6 @@ def capturar_semana(actual: pd.DataFrame, tiempos: list[str], k: str) -> list[di
             st.html(f'<div class="g-comida">{comida.upper()}</div>')
             _inicial(clave_igual, solo_todos)
             st.toggle("Igual toda la semana", key=clave_igual)
-            _inicial(f"kcal_{k}_{comida}", kcal_de(de_c, comida))
-            kcal = st.number_input(
-                "kcal", min_value=0, step=10,
-                key=f"kcal_{k}_{comida}", placeholder="kcal", label_visibility="collapsed",
-            )
-            kcal = kcal or ""
 
         if igual:
             inicial = texto_de(de_c[de_c["dia"] == "Todos"]) or texto_de(items_de(de_c, "Lunes", comida))
@@ -1175,7 +1214,7 @@ def capturar_semana(actual: pd.DataFrame, tiempos: list[str], k: str) -> list[di
             )
             if t.strip():
                 filas.append({"dia": "Todos", "comida": comida, "titulo": "", "platillo": t.strip(),
-                              "notas": "", "kcal": kcal})
+                              "notas": ""})
         else:
             for col, d in zip(cols[1:], DIAS):
                 _inicial(f"c_{k}_{comida}_{d}", texto_de(items_de(de_c, d, comida)))
@@ -1185,7 +1224,7 @@ def capturar_semana(actual: pd.DataFrame, tiempos: list[str], k: str) -> list[di
                 )
                 if t.strip():
                     filas.append({"dia": d, "comida": comida, "titulo": "", "platillo": t.strip(),
-                                  "notas": "", "kcal": kcal})
+                                  "notas": ""})
         st.write("")
 
     # Indicaciones (agua, etc.)
@@ -1198,6 +1237,17 @@ def capturar_semana(actual: pd.DataFrame, tiempos: list[str], k: str) -> list[di
     )
     if t.strip():
         filas.append({"dia": "Todos", "comida": "Indicaciones", "titulo": "", "platillo": t.strip(), "notas": ""})
+
+    # Consumo de agua
+    cols = st.columns([1.1, 7], gap="small")
+    cols[0].html('<div class="g-comida">CONSUMO DE AGUA</div>')
+    _inicial(f"agua_{k}", texto_de(actual[actual["comida"] == "Agua"]))
+    t = cols[1].text_area(
+        "Consumo de agua", label_visibility="collapsed", height=68,
+        key=f"agua_{k}",
+    )
+    if t.strip():
+        filas.append({"dia": "Todos", "comida": "Agua", "titulo": "", "platillo": t.strip(), "notas": ""})
     return filas
 
 
@@ -1228,7 +1278,11 @@ def menu_excel(m: pd.DataFrame, nombre: str, vigente) -> bytes:
     ws["A1"] = f"Menú de {nombre}"
     ws["A1"].font = Font(name="Calibri", size=16, bold=True, color="36594A")
     ws.merge_cells("A2:H2")
-    ws["A2"] = f"Vigente desde el {vigente:%d/%m/%Y}" if vigente is not None else ""
+    kd = kcal_dia_de(m)
+    ws["A2"] = " · ".join(x for x in [
+        f"Vigente desde el {vigente:%d/%m/%Y}" if vigente is not None else "",
+        f"Kcal diarias: {kd:,}" if kd else "",
+    ] if x)
     ws["A2"].font = Font(name="Calibri", size=11, color="6B7A70")
 
     def texto_rico(texto: str):
@@ -1274,12 +1328,11 @@ def menu_excel(m: pd.DataFrame, nombre: str, vigente) -> bytes:
 
     for comida in ORDEN_COMIDAS[:-1]:
         if comida in set(m["comida"]):
-            k = kcal_de(m, comida)
-            etiqueta = f"{comida}\n{k} kcal" if k else comida
-            fila_comida(etiqueta, [texto_de(items_de(m, d, comida)) for d in DIAS])
-    indic = m[m["comida"] == "Indicaciones"]
-    if not indic.empty:
-        fila_comida("Indicaciones", [texto_de(indic)] * 7, relleno=crema)
+            fila_comida(comida, [texto_de(items_de(m, d, comida)) for d in DIAS])
+    for extra, titulo in (("Indicaciones", "Indicaciones"), ("Agua", "Consumo de agua")):
+        bloque = m[m["comida"] == extra]
+        if not bloque.empty:
+            fila_comida(titulo, [texto_de(bloque)] * 7, relleno=crema)
 
     ws.column_dimensions["A"].width = 16
     for letra in "BCDEFGH":
@@ -1320,6 +1373,38 @@ def kcal_de(m: pd.DataFrame, comida: str):
         return None
     v = pd.to_numeric(m.loc[m["comida"] == comida, "kcal"], errors="coerce").dropna()
     return int(v.iloc[0]) if not v.empty else None
+
+
+def kcal_dia_de(m: pd.DataFrame):
+    """Kcal diarias que escribió la nutrióloga (menús viejos: suma de cada tiempo)."""
+    if m is None or m.empty:
+        return None
+    if "kcal_dia" in m.columns:
+        v = pd.to_numeric(m["kcal_dia"], errors="coerce").dropna()
+        v = v[v > 0]
+        if not v.empty:
+            return int(v.iloc[0])
+    total = sum(k for k in (kcal_de(m, c) for c in ORDEN_COMIDAS[:-1]) if k)
+    return total or None
+
+
+def meta_agua_menu(m: pd.DataFrame):
+    """Vasos al día según el cuadro 'Consumo de agua' (ej. '2.8 litros (11 vasos aprox.)')."""
+    if m is None or m.empty:
+        return None
+    m = menu_limpio(m)
+    texto = sin_acentos(texto_de(m[m["comida"] == "Agua"]))
+    if not texto:
+        return None
+    v = re.search(r"(\d+)\s*vasos?", texto)
+    if v:
+        n = int(v.group(1))
+    else:
+        lt = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:l\b|lt|litro)", texto)
+        if not lt:
+            return None
+        n = round(float(lt.group(1).replace(",", ".")) / 0.25)
+    return n if 1 <= n <= 30 else None
 
 
 def comidas_del_dia(m: pd.DataFrame, dia: str) -> list[str]:
@@ -1379,7 +1464,7 @@ def tarjeta_comida(m: pd.DataFrame, dia: str, comida: str, hecho: bool, clave: s
             st.checkbox("Ya lo comí", value=hecho, key=f"chk_{clave}", on_change=marcar)
 
 
-def score_html(kcal_hechas, kcal_total, n_hechas, n_total) -> str:
+def score_html(kcal_hechas, kcal_total, n_hechas, n_total, kcal_dia=None) -> str:
     if kcal_total:
         pct = min(kcal_hechas / kcal_total, 1)
         top = (f'<span class="s-num">{kcal_hechas:,}</span>'
@@ -1396,7 +1481,10 @@ def score_html(kcal_hechas, kcal_total, n_hechas, n_total) -> str:
     return (
         f'<div class="score"><div class="s-top">🔥 {top}</div>'
         f'<div class="barra"><div style="width:{pct * 100:.0f}%"></div></div>'
-        f'<div class="s-msg">{msg}</div></div>'
+        f'<div class="s-msg">{msg}</div>'
+        + (f'<div class="s-msg" style="opacity:.8">Tu plan: <b>{kcal_dia:,} kcal</b> diarias</div>'
+           if kcal_dia else "")
+        + '</div>'
     )
 
 
@@ -1582,7 +1670,7 @@ def menu_pdf(m: pd.DataFrame, paciente: dict, fecha_menu, peso=None) -> bytes:
         encabezado += f"   CED. PROF. {cedula}"
     fecha_txt = f"{fecha_menu.day} {MESES_LARGOS[fecha_menu.month - 1]} {fecha_menu.year}"
 
-    kcal_total = sum(k for k in (kcal_de(m, c) for c in ORDEN_COMIDAS[:-1]) if k)
+    kcal_total = kcal_dia_de(m)
     edad = edad_de(paciente.get("fecha_nacimiento", ""))
     est = numero(paciente.get("estatura_m", ""))
     datos = [
@@ -1608,11 +1696,7 @@ def menu_pdf(m: pd.DataFrame, paciente: dict, fecha_menu, peso=None) -> bytes:
             continue
         r = len(filas)
         textos = [texto_de(items_de(m, d, comida)) for d in DIAS]
-        k = kcal_de(m, comida)
-        etiqueta = [Paragraph(limpio(comida.upper()), e_com)]
-        if k:
-            etiqueta.append(Paragraph(f"{k} kcal", e_celda_c))
-        fila = [etiqueta]
+        fila = [Paragraph(limpio(comida.upper()), e_com)]
         i = 0
         while i < 7:
             j = i
@@ -1625,11 +1709,12 @@ def menu_pdf(m: pd.DataFrame, paciente: dict, fecha_menu, peso=None) -> bytes:
             i = j + 1
         filas.append(fila)
         estilos.append(("BACKGROUND", (0, r), (0, r), verde_cl))
-    indic = m[m["comida"] == "Indicaciones"]
-    if not indic.empty:
-        r = len(filas)
-        filas.append([Paragraph("INDICACIONES", e_com), celda(texto_de(indic), centrado=False)] + [""] * 6)
-        estilos += [("SPAN", (1, r), (7, r)), ("BACKGROUND", (0, r), (-1, r), crema)]
+    for extra, titulo in (("Indicaciones", "INDICACIONES"), ("Agua", "CONSUMO DE AGUA")):
+        bloque = m[m["comida"] == extra]
+        if not bloque.empty:
+            r = len(filas)
+            filas.append([Paragraph(titulo, e_com), celda(texto_de(bloque), centrado=False)] + [""] * 6)
+            estilos += [("SPAN", (1, r), (7, r)), ("BACKGROUND", (0, r), (-1, r), crema)]
 
     tabla = Table(filas, colWidths=[ancho_com] + [ancho_dia] * 7, repeatRows=1)
     tabla.setStyle(TableStyle(estilos))
@@ -2211,7 +2296,7 @@ def vista_paciente():
                 dia = st.selectbox("Día", DIAS, index=ahora.weekday())
                 es_hoy = dia == DIAS[ahora.weekday()] and elegido == vigente
                 comidas = comidas_del_dia(m, dia)
-                kcal = {c: kcal_de(m, c) for c in comidas}
+                kcal_dia = kcal_dia_de(m)
 
                 hechas = set()
                 if es_hoy:
@@ -2224,12 +2309,10 @@ def vista_paciente():
                                 "comida",
                             ]
                         )
-                    kcal_total = sum(v for v in kcal.values() if v)
-                    kcal_hechas = sum(kcal[c] or 0 for c in comidas if c in hechas)
                     st.html(score_html(
-                        kcal_hechas, kcal_total, len(hechas & set(comidas)), len(comidas)
+                        0, 0, len(hechas & set(comidas)), len(comidas), kcal_dia
                     ))
-                    meta_ag = meta_agua_de(p)
+                    meta_ag = meta_agua_menu(m) or meta_agua_de(p)
                     vasos = vasos_de(pid, hoy_iso)
                     st.html(agua_html(vasos, meta_ag))
                     a1, a2, _ = st.columns([2, 1, 3])
@@ -2249,18 +2332,17 @@ def vista_paciente():
                             if st.session_state[f"chk_{clave}"]:
                                 agregar_filas("Registro", [{
                                     "id_paciente": pid, "fecha": hoy_iso,
-                                    "comida": comida, "kcal": kcal.get(comida) or "",
+                                    "comida": comida, "kcal": "",
                                 }])
                             else:
                                 borrar_donde("Registro", id_paciente=pid, fecha=hoy_iso, comida=comida)
-                    tarjeta_comida(m, dia, comida, comida in hechas, clave, marcar, kcal.get(comida))
+                    tarjeta_comida(m, dia, comida, comida in hechas, clave, marcar)
 
-                indic = m[m["comida"] == "Indicaciones"]
-                if not indic.empty:
-                    st.html(
-                        f'{CSS_MENU}<div class="card-menu indic"><div class="c-com">Indicaciones</div>'
-                        f"{celda_html(indic)}</div>"
-                    )
+                extras = extras_html(m)
+                if extras:
+                    st.html(CSS_MENU + extras)
+                if kcal_dia and not es_hoy:
+                    st.caption(f"Tu plan: **{kcal_dia:,} kcal** diarias")
 
             elif vista == "Semana":
                 st.html(menu_semana_html(m))
@@ -2349,13 +2431,7 @@ def vista_paciente():
             if datos:
                 st.html('<div class="meta-card">' + "<br>".join(datos) + "</div>")
 
-            elegida = st.selectbox("Ver evolución de", metricas_con_datos(med))
-            st.altair_chart(
-                grafica_metrica(
-                    med, elegida, METRICAS[elegida], meta if METRICAS[elegida] == "peso_kg" else None
-                ),
-                use_container_width=True,
-            )
+            graficas_apiladas(med, meta)
 
             notas = med[med["notas"].astype(str).str.strip() != ""]
             if not notas.empty:
@@ -3139,13 +3215,7 @@ def panel_nutriologa():
                     resumen.append(f"meta {meta:g} kg")
                 if resumen:
                     st.caption(" · ".join(resumen))
-                elegida = st.selectbox("Ver evolución de", metricas_con_datos(med), key="met_admin")
-                st.altair_chart(
-                    grafica_metrica(
-                        med, elegida, METRICAS[elegida], meta if METRICAS[elegida] == "peso_kg" else None
-                    ),
-                    use_container_width=True,
-                )
+                graficas_apiladas(med, meta)
                 tabla = med.drop(columns=["id_paciente"]).iloc[::-1].copy()
                 tabla["fecha"] = tabla["fecha"].dt.strftime("%d/%m/%Y")
                 nombres_col = {"fecha": "Fecha", "notas": "Notas", **{c: k for k, c in METRICAS.items()}}
@@ -3187,18 +3257,24 @@ def panel_nutriologa():
 
                 ronda = st.session_state.get(f"ronda_menu_{pid}", 0)
                 k_menu = f"{pid}_{version}_{ronda}"
+                _inicial(f"kcal_dia_{k_menu}", kcal_dia_de(actual))
+                ck, _ = st.columns([1, 3])
+                kcal_dia = ck.number_input(
+                    "🔥 Kcal diarias", min_value=0, step=50, key=f"kcal_dia_{k_menu}",
+                    placeholder="Ej. 1500",
+                )
                 filas = capturar_semana(actual, tiempos, k_menu)
+                for f in filas:
+                    f["kcal_dia"] = int(kcal_dia) if kcal_dia else ""
                 st.button(
                     "🧹 Vaciar todos los cuadros", key=f"vaciar_{k_menu}",
                     on_click=vaciar_cuadros, args=(k_menu,),
                     help="Deja la semana en blanco para escribir un menú nuevo desde cero",
                 )
 
-                total = sum(
-                    {f["comida"]: f["kcal"] for f in filas if f.get("kcal")}.values()
-                )
-                if total:
-                    st.caption(f"Total del día: **{total:,} kcal**")
+                vasos_meta = meta_agua_menu(pd.DataFrame(filas)) if filas else None
+                if vasos_meta:
+                    st.caption(f"💧 Meta de agua de la paciente en la app: **{vasos_meta} vasos** al día")
 
                 with st.expander("👀 Vista previa (como lo verá la paciente)"):
                     if filas:
